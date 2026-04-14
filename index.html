@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SimpleTree | Cloud Persistence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #f8fafc; color: #1e293b; }
+        .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
+        .link-button { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .link-button:hover { transform: translateY(-5px) scale(1.02); filter: brightness(1.1); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }
+        .loading-dots:after { content: '.'; animation: dots 1s steps(5, end) infinite; }
+        @keyframes dots { 0%, 20% { content: '.'; } 40% { content: '..'; } 60% { content: '...'; } 80%, 100% { content: ''; } }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <div id="toast" class="fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full text-white text-sm font-bold shadow-xl hidden"></div>
+
+    <!-- Modal Login (Access Key) -->
+    <div id="login-modal" class="fixed inset-0 bg-slate-900 z-[60] flex items-center justify-center p-6">
+        <div class="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl text-center">
+            <h2 class="text-2xl font-black mb-2">Selamat Datang</h2>
+            <p class="text-slate-500 text-sm mb-6">Masukkan Kunci Akses untuk memuat data Anda dari cloud.</p>
+            <input type="text" id="access-key-input" placeholder="Contoh: kunci-rahasiaku" class="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl mb-4 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center">
+            <button id="login-btn" class="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-indigo-700 transition-all">Buka Link Tree</button>
+            <p class="mt-4 text-[10px] text-slate-400 uppercase tracking-widest font-bold">Data akan tersimpan aman di Cloud</p>
+        </div>
+    </div>
+
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col p-6 hidden">
+        <header class="text-center mb-12 pt-8">
+            <div class="w-24 h-24 mx-auto mb-4 bg-gradient-to-tr from-indigo-600 to-pink-500 rounded-full flex items-center justify-center text-white text-3xl font-bold shadow-xl border-4 border-white">
+                <span id="initials">S</span>
+            </div>
+            <h1 id="display-name" class="text-2xl font-extrabold text-slate-900 tracking-tight">Memuat...</h1>
+            <p class="text-slate-500 text-sm mt-1 font-medium italic">Personal Link Tree</p>
+        </header>
+
+        <main id="links-container" class="space-y-4 flex-grow"></main>
+
+        <div class="flex flex-col items-center gap-3 mt-16 mb-8">
+            <button id="toggle-admin" class="px-6 py-2 bg-slate-200 text-slate-600 text-[10px] hover:bg-slate-300 transition-all uppercase tracking-widest font-bold rounded-full">Kelola Profil</button>
+            <button id="logout-btn" class="text-[9px] text-red-400 font-bold uppercase tracking-widest">Ganti Kunci Akses</button>
+            <span id="key-display" class="text-[9px] text-slate-300 font-mono italic"></span>
+        </div>
+
+        <!-- Panel Admin -->
+        <div id="admin-panel" class="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-50 hidden flex items-end sm:items-center justify-center p-4">
+            <div class="glass-card bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-black text-slate-800">Edit Profil</h2>
+                    <button id="close-admin" class="p-2 rounded-full bg-slate-100 text-slate-400">✕</button>
+                </div>
+                <div class="space-y-6 overflow-y-auto">
+                    <input type="text" id="input-name" placeholder="Nama Anda" class="w-full px-5 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-semibold">
+                    <div class="border-t pt-4">
+                        <label class="block text-[10px] font-black text-indigo-400 uppercase mb-2">Tambah/Edit Link</label>
+                        <input type="hidden" id="edit-index" value="-1">
+                        <input type="text" id="link-title" placeholder="Judul Link" class="w-full px-5 py-4 bg-slate-50 border rounded-2xl mb-2">
+                        <input type="text" id="link-url" placeholder="URL (google.com)" class="w-full px-5 py-4 bg-slate-50 border rounded-2xl">
+                    </div>
+                    <button id="save-btn" class="w-full bg-slate-900 text-white font-black py-5 rounded-2xl">Simpan & Update Cloud</button>
+                    <div id="admin-link-list" class="space-y-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBjuoGFhMnn6IHA8HvYnriNuaZeYEWJRMw",
+            authDomain: "linkfree-4ae9c.firebaseapp.com",
+            projectId: "linkfree-4ae9c",
+            storageBucket: "linkfree-4ae9c.firebasestorage.app",
+            messagingSenderId: "1021062244047",
+            appId: "1:1021062244047:web:9b4164588fe1fb268239ba"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const appId = 'linkfree-persistent-v2';
+
+        let accessKey = localStorage.getItem('simpletree_key') || '';
+        let profileData = { name: 'User Baru', links: [] };
+        let unsubscribe = null;
+
+        const loginModal = document.getElementById('login-modal');
+        const appDiv = document.getElementById('app');
+        const toast = document.getElementById('toast');
+
+        function showToast(msg, isError = false) {
+            toast.textContent = msg;
+            toast.className = `fixed top-5 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full text-white text-sm font-bold shadow-xl ${isError ? 'bg-red-500' : 'bg-green-500'}`;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 3000);
+        }
+
+        // PERBAIKAN: Menggunakan path genap (koleksi/dokumen/koleksi/dokumen/koleksi/dokumen)
+        // Path sebelumnya: artifacts/linkfree-persistent-v2/public/data/rahasiaku123 (5 segmen - ERROR)
+        // Path baru: artifacts/linkfree-persistent-v2/public/data/users/rahasiaku123 (6 segmen - VALID)
+        function getDocRef() {
+            return doc(db, 'artifacts', appId, 'public', 'data', 'users', accessKey);
+        }
+
+        async function saveToCloud(data) {
+            if (!accessKey) return;
+            try {
+                const docRef = getDocRef();
+                await setDoc(docRef, JSON.parse(JSON.stringify(data)));
+                showToast("Cloud sinkron!");
+            } catch (e) {
+                console.error("Save Error:", e);
+                showToast("Gagal simpan ke cloud", true);
+            }
+        }
+
+        function loadData() {
+            if (!accessKey) return;
+            
+            if (unsubscribe) unsubscribe();
+
+            try {
+                const docRef = getDocRef();
+                
+                unsubscribe = onSnapshot(docRef, (snap) => {
+                    if (snap.exists()) {
+                        profileData = snap.data();
+                        renderUI();
+                    } else {
+                        // Jika kunci baru, buat data awal di cloud
+                        saveToCloud(profileData);
+                    }
+                }, (error) => {
+                    console.error("Snapshot Error:", error);
+                    showToast("Gagal memuat data cloud", true);
+                });
+
+                loginModal.classList.add('hidden');
+                appDiv.classList.remove('hidden');
+                document.getElementById('key-display').textContent = `Key: ${accessKey}`;
+            } catch (e) {
+                console.error("Load Error:", e);
+                showToast("Path dokumen tidak valid", true);
+            }
+        }
+
+        function renderUI() {
+            document.getElementById('display-name').textContent = profileData.name || 'User Baru';
+            const container = document.getElementById('links-container');
+            container.innerHTML = '';
+            
+            (profileData.links || []).forEach(link => {
+                const a = document.createElement('a');
+                const url = link.url.startsWith('http') ? link.url : `https://${link.url}`;
+                a.href = url;
+                a.target = '_blank';
+                a.className = "link-button block w-full py-5 px-8 bg-white text-slate-800 text-center font-bold rounded-2xl shadow-sm border border-slate-100";
+                a.textContent = link.title;
+                container.appendChild(a);
+            });
+
+            const adminList = document.getElementById('admin-link-list');
+            adminList.innerHTML = '';
+            (profileData.links || []).forEach((link, idx) => {
+                const div = document.createElement('div');
+                div.className = "p-3 bg-slate-50 rounded-xl flex justify-between items-center text-xs";
+                div.innerHTML = `<span class="font-bold truncate w-32">${link.title}</span>
+                    <div class="flex gap-2">
+                        <button onclick="window.editLink(${idx})" class="text-indigo-600 font-bold">Edit</button>
+                        <button onclick="window.deleteLink(${idx})" class="text-red-500 font-bold">Hapus</button>
+                    </div>`;
+                adminList.appendChild(div);
+            });
+        }
+
+        // Global functions for buttons
+        window.editLink = (idx) => {
+            const link = profileData.links[idx];
+            document.getElementById('link-title').value = link.title;
+            document.getElementById('link-url').value = link.url;
+            document.getElementById('edit-index').value = idx;
+        };
+
+        window.deleteLink = async (idx) => {
+            profileData.links.splice(idx, 1);
+            await saveToCloud(profileData);
+        };
+
+        // Event Listeners
+        document.getElementById('login-btn').onclick = () => {
+            const key = document.getElementById('access-key-input').value.trim();
+            if (key.length < 3) return showToast("Kunci minimal 3 karakter", true);
+            accessKey = key;
+            localStorage.setItem('simpletree_key', key);
+            loadData();
+        };
+
+        document.getElementById('logout-btn').onclick = () => {
+            localStorage.removeItem('simpletree_key');
+            location.reload();
+        };
+
+        document.getElementById('save-btn').onclick = async () => {
+            const name = document.getElementById('input-name').value.trim();
+            const title = document.getElementById('link-title').value.trim();
+            const url = document.getElementById('link-url').value.trim();
+            const idx = parseInt(document.getElementById('edit-index').value);
+
+            if (name) profileData.name = name;
+            
+            if (title && url) {
+                if (idx >= 0) {
+                    profileData.links[idx] = { title, url };
+                } else {
+                    profileData.links.push({ title, url });
+                }
+                document.getElementById('link-title').value = '';
+                document.getElementById('link-url').value = '';
+                document.getElementById('edit-index').value = '-1';
+            }
+
+            await saveToCloud(profileData);
+            document.getElementById('admin-panel').classList.add('hidden');
+        };
+
+        document.getElementById('toggle-admin').onclick = () => {
+            document.getElementById('input-name').value = profileData.name;
+            document.getElementById('admin-panel').classList.remove('hidden');
+        };
+
+        document.getElementById('close-admin').onclick = () => {
+            document.getElementById('admin-panel').classList.add('hidden');
+        };
+
+        // Auto load jika sudah ada key di storage
+        if (accessKey) loadData();
+    </script>
+</body>
+</html>
